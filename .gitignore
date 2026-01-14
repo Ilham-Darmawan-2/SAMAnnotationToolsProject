@@ -3,5 +3,7 @@ datasetsInput/
 output/
 inference/
 models/
+datasets/
 yolo11n.pt
 yolo11s.pt
+temp/
