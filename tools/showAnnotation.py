@@ -3,7 +3,7 @@ import cv2
 import xml.etree.ElementTree as ET
 
 # ================== CONFIG ==================
-IMAGE_DIR = "datasetsInput/vehicle-9"
+IMAGE_DIR = "datasetsInput/vehicle-1"
 VOC_DIR   = "output/vehicle"              # XML dari annotator (PAS)
 YOLO_DIR  = "inference/vehicle/labels"    # TXT hasil export YOLO
 WINDOW_NAME = "Annotation Viewer"

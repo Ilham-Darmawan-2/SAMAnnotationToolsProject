@@ -7,3 +7,4 @@ datasets/
 yolo11n.pt
 yolo11s.pt
 temp/
+VOCDatasetOutput/

@@ -30,14 +30,13 @@ pip install -r requirements.txt
 sudo apt install python3.10-tk
 
 # Run Tools
-python main_gui.py
+python ObjectDetectionAnnotator.py
 ```
 
 ### Folder Structure
 ```
 project/
-├── main_gui.py           # 🆕 GUI version (recommended)
-├── main.py               # CLI version (original)
+├── ObjectDetectionAnnotator.py
 ├── utils/
 │   ├── config.py
 │   ├── file_handler.py
@@ -85,26 +84,6 @@ project/
 5. **Train** - Tekan `T` untuk training (min 10 images)
 6. **Auto Annotate** - Tekan `P` untuk enable auto inference saat navigasi
 
-## 🔧 Configuration
-
-Edit di `utils/config.py`:
-```python
-workspaceName = "ppeKujangv2"
-input_folder = "datasetsInput/ppeKujangv2-13"
-CLASSLIST = ["Face", "Shoes", "Safety-Helmet", "Body", "Worker"]
-```
-
-## 🎨 GUI vs CLI
-
-| Feature | GUI | CLI |
-|---------|-----|-----|
-| User Friendly | ✅ Modern UI | ⚠️ Terminal based |
-| Mouse Control | ✅ Smooth | ✅ OpenCV window |
-| Visual Feedback | ✅ Rich colors | ⚠️ Basic |
-| Shortcuts Help | ✅ Built-in panel | ❌ Manual |
-| Multi-monitor | ✅ Flexible | ⚠️ Fixed window |
-| Performance | ✅ Good | ✅ Faster |
-
 ## 💡 Tips
 
 1. **Precision Conversion**: Sistem menggunakan `round()` untuk konversi koordinat display ↔ original, meminimalkan error presisi
@@ -137,5 +116,15 @@ CLASSLIST = ["Face", "Shoes", "Safety-Helmet", "Body", "Worker"]
 - **Auto save** saat navigasi - annotations tersimpan otomatis
 
 ---
+
+## Export Dataset
+- Saat ini dataset yang disupport hanya format pascalVOC
+```bash
+# Export Dataset
+python exportToVOCDatasetFormat.py
+```
+
+# Tools
+- file python pada folder tools merupakan tools saya selama annotasi dataset, saya belum berfikir untuk membuatnya menjadi GUI atau semacamnya, anda bebas menghapusnya atau tidak menggunakannya.
 
 🎉 **Enjoy annotating with style!** 🎉
