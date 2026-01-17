@@ -341,6 +341,7 @@ class DatasetGeneratorGUI:
         self.log(f"✅ Ditemukan {len(self.workspaces)} workspace")
     
     def on_workspace_select(self, event):
+        global WORKSPACENAME
         selection = self.workspace_listbox.curselection()
         if selection:
             idx = selection[0]
