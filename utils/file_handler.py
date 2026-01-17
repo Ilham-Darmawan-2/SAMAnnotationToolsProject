@@ -48,26 +48,28 @@ def save_yolo_label_and_image(img_name, orig_img, classList):
     dest_img = os.path.join(inference_images, img_name)
     h, w = orig_img.shape[:2]
     lines = []
-    
+
     for bbox in state.bboxes:
-        x1 = int(round(bbox[0] / state.display_scale))
-        y1 = int(round(bbox[1] / state.display_scale))
-        x2 = int(round(bbox[2] / state.display_scale))
-        y2 = int(round(bbox[3] / state.display_scale))
-        cls = bbox[4]
+        x1, y1, x2, y2, cls = bbox  # SUDAH koordinat asli
+
         if cls not in classList:
             continue
+
         idx = classList.index(cls)
+
         bw = (x2 - x1) / w
         bh = (y2 - y1) / h
         cx = (x1 + x2) / 2 / w
         cy = (y1 + y2) / 2 / h
+
         lines.append(f"{idx} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
-    
+
     with open(label_path, "w") as f:
         f.write("\n".join(lines))
+
     shutil.copy2(os.path.join(input_folder, img_name), dest_img)
     print(f"[INFO] Saved YOLO label: {label_path}")
+
 
 def load_annotation_local(img_name_local):
     """Load annotations from VOC XML file"""

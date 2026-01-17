@@ -69,7 +69,7 @@ class ClassManager:
 
             self.colors.append(color)
 
-        print(f"[ClassManager] Generated {len(self.colors)} high-contrast colors")
+        print(f"[ClassManager] Generated {len(self.colors)} colors")
     
     def add_class(self, class_name: str) -> Tuple[bool, str]:
         """

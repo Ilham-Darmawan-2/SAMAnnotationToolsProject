@@ -13,13 +13,18 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 from PIL import Image, ImageTk
 import numpy as np
 
-from utils.config import (CLASSLIST, state, input_folder, colorsPalette, output_folder, class_manager)
+from utils.config import (CLASSLIST, state, input_folder, colorsPalette, output_folder, class_manager, inference_root, model_path, model_folder)
 from utils.file_handler import load_annotation_local
-from utils.training import train_model, inference_current
+from utils.inferenceObjectDetection import inference_current
 from utils.image_manager import (repeat_last_annotations, delete_current_image, 
                                  save_and_backup_bboxes)
 import sys
 import queue
+import subprocess
+import shutil
+
+EPOCH = 5
+BATCH = 4
 
 class TkTerminalRedirector:
     def __init__(self, text_widget):
@@ -112,6 +117,15 @@ class AnnotationGUI:
         for i in range(9):
             self.root.bind(str(i+1), lambda e, idx=i: self.select_class_by_number(idx))
     
+    def toggle_bbox_text(self):
+        state.show_bbox_text = not state.show_bbox_text
+        if state.show_bbox_text:
+            self.text_label.config(text="🅣 Text: ON", fg='#00ff00')
+        else:
+            self.text_label.config(text="🅣 Text: OFF", fg='#ff4444')
+        self.update_display()
+
+    
     def create_widgets(self):
         # ========== TOP TOOLBAR ==========
         toolbar = tk.Frame(self.root, bg='#1e1e1e', height=60)
@@ -172,6 +186,15 @@ class AnnotationGUI:
         tk.Button(status_frame, text="Force Box (B)", command=self.toggle_force_new_bbox,
                  bg='#404040', fg='white', padx=8, pady=8,
                  font=('Arial', 8)).pack(side=tk.RIGHT, padx=2)
+        
+        self.text_label = tk.Label(status_frame, text="🅣 Text: ON",
+                    bg='#1e1e1e', fg='#00ff00', font=('Arial', 10))
+        self.text_label.pack(side=tk.RIGHT, padx=10)
+
+        tk.Button(status_frame, text="Toggle Text",
+                command=self.toggle_bbox_text,
+                bg='#404040', fg='white', padx=8, pady=8,
+                font=('Arial', 8)).pack(side=tk.RIGHT, padx=2)
         
         # ========== MAIN CONTENT AREA ==========
         content = tk.Frame(self.root, bg='#2b2b2b')
@@ -564,7 +587,7 @@ class AnnotationGUI:
         
         state.orig_shape = orig.shape
         h, w = state.orig_shape[:2]
-        
+
         # Get canvas size
         self.canvas.update_idletasks()
         canvas_w = self.canvas.winfo_width()
@@ -634,9 +657,10 @@ class AnnotationGUI:
             # Draw label background
             label = cls
             (label_w, label_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(img_array, (x1, y1-label_h-8), (x1+label_w+8, y1), color_rgb, -1)
-            cv2.putText(img_array, label, (x1+4, y1-4), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            if state.show_bbox_text:
+                cv2.rectangle(img_array, (x1, y1-label_h-8), (x1+label_w+8, y1), color_rgb, -1)
+                cv2.putText(img_array, label, (x1+4, y1-4), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
         
         # Force new bbox indicator
         if state.force_new_bbox:
@@ -1012,26 +1036,114 @@ class AnnotationGUI:
             self.update_display()
             self.update_info()
     
-    def start_training(self):
-        """Start model training in background"""
-        self.save_current()
-        if not state.training_running:
-            print("[GUI] Starting training...")
-            threading.Thread(target=self.train_thread, daemon=True).start()
-            messagebox.showinfo("Training Started", 
-                              "Training started in background!\nCheck console for progress.",
-                              parent=self.root)
-        else:
-            messagebox.showwarning("Training Running", 
-                                 "Training already running. Please wait...",
-                                 parent=self.root)
+    def monitor_training_process(self):
+        """Cek apakah subprocess training sudah selesai"""
+
+        if hasattr(state, "training_process"):
+            process = state.training_process
+
+            # poll() == None artinya masih jalan
+            if process.poll() is None:
+                # cek lagi 2 detik kemudian
+                self.root.after(2000, self.monitor_training_process)
+            else:
+                # training selesai
+                state.training_running = False
+
+                messagebox.showinfo(
+                    "Training Finished",
+                    "YOLO Training process has completed!",
+                    parent=self.root
+                )
     
-    def train_thread(self):
-        """Training thread wrapper"""
-        train_model()
-        self.root.after(0, lambda: messagebox.showinfo("Training Complete", 
-                                                       "Model training completed!",
-                                                       parent=self.root))
+    def start_training(self):
+        """Start YOLO training di terminal baru dengan argparse"""
+        global CLASSLIST, model_folder, model_path
+        self.save_current()
+        
+        # Get latest from class manager
+        CLASSLIST = class_manager.get_classes()
+
+        # Cek apakah process masih jalan
+        if state.training_running and hasattr(state, "training_process"):
+            if state.training_process.poll() is None:
+                messagebox.showwarning(
+                    "Training Running",
+                    "Training already running. Please wait...",
+                    parent=self.root
+                )
+                return
+            else:
+                # Process sudah selesai
+                state.training_running = False
+
+        state.training_running = True
+
+        train_script = os.path.join(
+            os.path.dirname(__file__),
+            "utils",
+            "training.py"
+        )
+
+        dataset_root = inference_root
+        images_folder = input_folder
+        classlist = CLASSLIST
+
+        class_args = []
+        for c in classlist:
+            class_args.append(c)
+
+        cmd = [
+            sys.executable,
+            train_script,
+
+            "--dataset_root", dataset_root,
+            "--images_folder", images_folder,
+
+            "--model_path", model_path,
+            "--model_folder", model_folder,
+
+            "--epochs", str(EPOCH),
+            "--batch", str(BATCH),
+
+            "--classlist"
+        ] + class_args
+
+        try:
+            terminal_cmd = None
+
+            if shutil.which("gnome-terminal"):
+                terminal_cmd = ["gnome-terminal", "--wait", "--"] + cmd
+            elif shutil.which("xterm"):
+                terminal_cmd = ["xterm", "-hold", "-e"] + cmd
+            elif shutil.which("konsole"):
+                terminal_cmd = ["konsole", "-e"] + cmd
+            else:
+                terminal_cmd = cmd
+
+            # SIMPAN PROCESS OBJECT
+            process = subprocess.Popen(terminal_cmd)
+
+            # simpan ke state
+            state.training_process = process
+
+            messagebox.showinfo(
+                "Training Started",
+                "Training started in new terminal!\nCheck terminal for progress.",
+                parent=self.root
+            )
+
+            # Mulai monitoring proses di background
+            self.monitor_training_process()
+
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Failed to start training:\n{str(e)}",
+                parent=self.root
+            )
+
+            state.training_running = False
     
     def run_inference(self):
         """Run inference on current image"""

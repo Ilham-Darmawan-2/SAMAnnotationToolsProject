@@ -85,6 +85,11 @@ class State:
         self.auto_annotation = False
         self.current_class = CLASSLIST[0] if CLASSLIST else "Object"
         self.visible_class = {cls: True for cls in CLASSLIST}
+        self.show_bbox_text = True
+        self.training_running = False
+        self.training_process = None
+        
+
 
 # Global state instance
 state = State()

@@ -15,10 +15,10 @@ from ultralytics import YOLO  # make sure ultralytics installed in same env
 import numpy as np
 
 # ---------- CONFIG ----------
-CAM_INDEX = 0
+CAM_INDEX = "vehicle-cctv-4.mp4"
 SKIP_FRAMES = 2        # 2 => process every (SKIP_FRAMES + 1)th frame (every 3rd frame)
 DISPLAY_H = 720        # max height for display/inference
-MODEL_PATH = "models/ppeKujangv2/modelAssistant.pt"  # change to your model (or pretrained)
+MODEL_PATH = "models/vehicle/modelAssistant.pt"  # change to your model (or pretrained)
 CONF_THRESHOLD = 0.4
 DEVICE = "cuda" if (cv2.cuda.getCudaEnabledDeviceCount() if hasattr(cv2, 'cuda') else False) else "cpu"
 # Fallback model name if MODEL_PATH doesn't exist (you can change)

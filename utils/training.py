@@ -1,21 +1,81 @@
 """
-Training and inference functions
+Training and inference functions with argparse
 """
 import os
 import shutil
 import numpy as np
 import torch
 import gc
-import cv2
-
-from .config import (inference_root, inference_images, inference_labels, 
-                     model_folder, model_path, CLASSLIST, state, input_folder)
+import argparse
 
 try:
     from ultralytics import YOLO
 except Exception as e:
     YOLO = None
     print("[INFO] ultralytics not installed. Training won't work.", e)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="YOLO Training Script")
+
+    parser.add_argument(
+        "--dataset_root",
+        type=str,
+        required=True,
+        help="Root folder of dataset (contains images/ and labels/)"
+    )
+
+    parser.add_argument(
+        "--images_folder",
+        type=str,
+        required=True,
+        help="Folder containing images for training"
+    )
+
+    parser.add_argument(
+        "--classlist",
+        nargs="+",
+        required=True,
+        help="List of class names, example: --classlist person car motor"
+    )
+
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default="best.pt",
+        help="Path to save or load YOLO model"
+    )
+
+    parser.add_argument(
+        "--model_folder",
+        type=str,
+        default="runs",
+        help="Folder to store training results"
+    )
+
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=10,
+        help="Number of training epochs"
+    )
+
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=4,
+        help="Training batch size"
+    )
+
+    parser.add_argument(
+        "--ratio",
+        type=float,
+        default=0.5,
+        help="Train/val split ratio"
+    )
+
+    return parser.parse_args()
+
 
 def split_train_val(root, ratio=0.7):
     """Split dataset into train and validation sets"""
@@ -35,7 +95,6 @@ def split_train_val(root, ratio=0.7):
     train_imgs = imgs[:train_count]
     val_imgs = imgs[train_count:]
 
-    # Create directories
     train_img_dir = os.path.join(root, "train/images")
     train_lbl_dir = os.path.join(root, "train/labels")
     val_img_dir = os.path.join(root, "val/images")
@@ -44,7 +103,6 @@ def split_train_val(root, ratio=0.7):
     for d in [train_img_dir, train_lbl_dir, val_img_dir, val_lbl_dir]:
         os.makedirs(d, exist_ok=True)
 
-    # Copy files
     for img in train_imgs:
         base = os.path.splitext(img)[0]
         txt = base + ".txt"
@@ -61,36 +119,33 @@ def split_train_val(root, ratio=0.7):
 
     return train_img_dir, val_img_dir
 
-def train_model():
-    """Train YOLO model in background"""
-    if state.training_running:
-        print("[INFO] Training already running.")
-        return
-    state.training_running = True
 
-    # Check image count
+def train_model(args):
+    """Train YOLO model using argparse inputs"""
+
+    inference_images = args.images_folder
+    inference_root = args.dataset_root
+    CLASSLIST = args.classlist
+    model_path = args.model_path
+    model_folder = args.model_folder
+
     images_infer = [f for f in os.listdir(inference_images)
                     if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
 
     if len(images_infer) < 10:
         print("[INFO] Not enough images to train (min 10 required).")
-        state.training_running = False
         return
 
-    # Split dataset
     print("[INFO] Splitting dataset...")
-    train_dir, val_dir = split_train_val(inference_root, ratio=0.5)
+    train_dir, val_dir = split_train_val(inference_root, ratio=args.ratio)
 
     if train_dir is None or val_dir is None:
         print("[ERROR] Dataset split failed.")
-        state.training_running = False
         return
 
-    # Absolute paths
     train_abs = os.path.abspath(train_dir)
     val_abs = os.path.abspath(val_dir)
 
-    # Write YAML
     yaml_path = os.path.join(inference_root, "data.yaml")
     with open(yaml_path, "w") as f:
         f.write(f"train: {train_abs}\n")
@@ -100,8 +155,24 @@ def train_model():
 
     print("[INFO] YAML created:", yaml_path)
 
-    # Initialize model
-    init_model = model_path if os.path.exists(model_path) else "yolo11s.pt"
+    # Determine which model will be used
+    if os.path.exists(model_path):
+        init_model = model_path
+
+        print("\n" + "="*70)
+        print("[INFO] USING EXISTING CUSTOM MODEL FOR TRAINING")
+        print("Model path :", model_path)
+        print("This training will CONTINUE from your custom model weights.")
+        print("="*70 + "\n")
+
+    else:
+        init_model = "yolo11s.pt"
+
+        print("\n" + "="*70)
+        print("[INFO] CUSTOM MODEL NOT FOUND")
+        print("Path checked :", model_path)
+        print("Falling back to default pretrained YOLO model: yolo11s.pt")
+        print("="*70 + "\n")
 
     try:
         model = YOLO(init_model)
@@ -109,9 +180,9 @@ def train_model():
 
         model.train(
             data=yaml_path,
-            epochs=5,
+            epochs=args.epochs,
             imgsz=640,
-            batch=4,
+            batch=args.batch,
             optimizer="SGD",
             lr0=0.001,
             momentum=0.937,
@@ -119,7 +190,10 @@ def train_model():
             warmup_epochs=1,
             project=model_folder,
             name="train_run",
-            exist_ok=True
+            exist_ok=True,
+            device=0,
+            amp=True,
+            workers=12
         )
 
         model.save(model_path)
@@ -128,7 +202,6 @@ def train_model():
     except Exception as e:
         print("[ERROR] Training failed:", e)
 
-    # Cleanup
     try:
         print("[INFO] Cleaning temporary train/val folders...")
         shutil.rmtree(os.path.join(inference_root, "train"))
@@ -137,49 +210,11 @@ def train_model():
     except Exception as e:
         print("[WARN] Failed to delete train/val folders:", e)
 
-    state.training_running = False
     del model
     torch.cuda.empty_cache()
     gc.collect()
 
-def inference_current(images, current_index, conf=0.5):
-    """Run inference on current image"""
-    if not os.path.exists(model_path):
-        print("[INFO] Model assistant does not exist.")
-        return
 
-    img_path = os.path.join(input_folder, images[current_index])
-    orig_img = cv2.imread(img_path)
-
-    model = YOLO(model_path)
-
-    with torch.no_grad():
-        results = model.predict(orig_img, conf=conf, iou=0.4)
-
-    # Process boxes
-    pred_boxes = []
-    for r in results:
-        if hasattr(r, "boxes"):
-            for box in r.boxes:
-                x1 = int(box.xyxy[0, 0].item())
-                y1 = int(box.xyxy[0, 1].item())
-                x2 = int(box.xyxy[0, 2].item())
-                y2 = int(box.xyxy[0, 3].item())
-                cls_idx = int(box.cls[0].item())
-                cls_name = CLASSLIST[cls_idx] if cls_idx < len(CLASSLIST) else str(cls_idx)
-
-                pred_boxes.append([
-                    int(round(x1 * state.display_scale)),
-                    int(round(y1 * state.display_scale)),
-                    int(round(x2 * state.display_scale)),
-                    int(round(y2 * state.display_scale)),
-                    cls_name
-                ])
-
-    state.bboxes = pred_boxes
-    print("[INFO] Inference saved and bboxes updated.")
-
-    # Cleanup
-    del results
-    torch.cuda.empty_cache()
-    gc.collect()
+if __name__ == "__main__":
+    args = parse_args()
+    train_model(args)
