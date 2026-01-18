@@ -1,13 +1,19 @@
 import os
 import shutil
+import signal
+import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import xml.etree.ElementTree as ET
 from PIL import Image
 import random
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 WORKSPACENAME = None
+PROCESSING_FLAG = False
+CURRENT_WORKSPACE = None
 
 class DatasetGeneratorGUI:
     def __init__(self, root):
@@ -34,12 +40,76 @@ class DatasetGeneratorGUI:
         self.train_ratio = tk.DoubleVar(value=70.0)
         self.valid_ratio = tk.DoubleVar(value=30.0)
         self.dataset_format = tk.StringVar(value="Pascal VOC")
+        self.is_cancelled = False
+        
+        # Setup signal handlers
+        self.setup_signal_handlers()
         
         # Setup GUI
         self.setup_gui()
         
         # Load workspaces
         self.load_workspaces()
+    
+    def setup_signal_handlers(self):
+        """Setup handlers for graceful shutdown"""
+        def signal_handler(sig, frame):
+            self.handle_cancellation()
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+    
+    def handle_cancellation(self):
+        """Handle cancellation and cleanup"""
+        global PROCESSING_FLAG, CURRENT_WORKSPACE
+        
+        if PROCESSING_FLAG and CURRENT_WORKSPACE:
+            self.log("\n" + "=" * 60)
+            self.log("⚠️ PEMBATALAN TERDETEKSI!")
+            self.log("🧹 Membersihkan proses dan menghapus file sementara...")
+            self.log("=" * 60)
+            
+            self.is_cancelled = True
+            
+            # Cleanup output folder
+            self.cleanup_workspace(CURRENT_WORKSPACE)
+            
+            self.log("✅ Pembersihan selesai. Aplikasi akan ditutup.")
+            self.log("=" * 60)
+            
+            PROCESSING_FLAG = False
+            self.root.after(2000, self.root.destroy)
+        else:
+            self.root.destroy()
+    
+    def cleanup_workspace(self, workspace_name):
+        """Clean up workspace output folder"""
+        output_dir = f"output/{workspace_name}"
+        
+        if os.path.exists(output_dir):
+            try:
+                # Remove all image files
+                image_exts = {'.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG'}
+                removed_count = 0
+                
+                for file in os.listdir(output_dir):
+                    file_path = os.path.join(output_dir, file)
+                    if os.path.splitext(file)[1] in image_exts:
+                        try:
+                            os.remove(file_path)
+                            removed_count += 1
+                        except Exception as e:
+                            self.log(f"⚠️ Gagal menghapus {file}: {e}")
+                
+                self.log(f"🗑️ {removed_count} file gambar dihapus dari {output_dir}")
+                
+                # Try to remove empty directory
+                if not os.listdir(output_dir):
+                    os.rmdir(output_dir)
+                    self.log(f"📁 Folder {output_dir} dihapus")
+                    
+            except Exception as e:
+                self.log(f"⚠️ Error saat cleanup: {e}")
     
     def setup_gui(self):
         # Title
@@ -270,9 +340,10 @@ class DatasetGeneratorGUI:
         # Add initial welcome message
         self.log("=" * 70)
         self.log("🎯 Dataset Generator - Ready!")
+        self.log("⚠️  Tekan Ctrl+C untuk membatalkan proses dengan aman")
         self.log("=" * 70)
         
-        # Generate Button - Make it SUPER visible!
+        # Generate Button
         button_container = tk.Frame(main_frame, bg=self.bg_dark, pady=10)
         button_container.pack(fill=tk.X)
         
@@ -308,7 +379,6 @@ class DatasetGeneratorGUI:
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
         self.log_text.update_idletasks()
-        self.root.update()
     
     def load_workspaces(self):
         self.log("🔍 Memindai folder datasetsInput...")
@@ -324,12 +394,9 @@ class DatasetGeneratorGUI:
         for folder_name in os.listdir(datasets_input):
             folder_path = os.path.join(datasets_input, folder_name)
             if os.path.isdir(folder_path):
-                # Parse format: {workspaceName}-{index}
                 if '-' in folder_name:
                     workspace_name = folder_name.rsplit('-', 1)[0]
-                    if workspace_name not in workspace_dict:
-                        workspace_dict[workspace_name] = 0
-                    workspace_dict[workspace_name] += 1
+                    workspace_dict[workspace_name] = workspace_dict.get(workspace_name, 0) + 1
         
         self.workspaces = sorted(workspace_dict.keys())
         
@@ -369,6 +436,10 @@ class DatasetGeneratorGUI:
         self.valid_label.config(text=f"{int(valid)}%")
     
     def fix_bbox_clamp(self, workspace_name):
+        """Optimized bbox fixing with batch processing"""
+        if self.is_cancelled:
+            return False
+            
         self.log(f"\n🔧 Memperbaiki bbox yang keluar dari gambar...")
         
         output_dir = f"output/{workspace_name}"
@@ -376,105 +447,166 @@ class DatasetGeneratorGUI:
             self.log(f"⚠️  Folder {output_dir} tidak ditemukan!")
             return False
         
+        xml_files = [f for f in os.listdir(output_dir) if f.endswith('.xml')]
         fixed_count = 0
         margin = 3
         
-        for xml_file in os.listdir(output_dir):
-            if not xml_file.endswith('.xml'):
-                continue
-            
+        for xml_file in xml_files:
+            if self.is_cancelled:
+                return False
+                
             xml_path = os.path.join(output_dir, xml_file)
-            tree = ET.parse(xml_path)
-            root = tree.getroot()
-            
-            size = root.find('size')
-            if size is None:
-                continue
-            
-            width = int(size.find('width').text)
-            height = int(size.find('height').text)
-            
-            changed = False
-            
-            for obj in root.findall('object'):
-                bbox = obj.find('bndbox')
-                if bbox is None:
+            try:
+                tree = ET.parse(xml_path)
+                root = tree.getroot()
+                
+                size = root.find('size')
+                if size is None:
                     continue
                 
-                xmin = int(float(bbox.find('xmin').text))
-                ymin = int(float(bbox.find('ymin').text))
-                xmax = int(float(bbox.find('xmax').text))
-                ymax = int(float(bbox.find('ymax').text))
+                width = int(size.find('width').text)
+                height = int(size.find('height').text)
+                changed = False
                 
-                # Clamp dengan margin
-                new_xmin = max(margin, min(xmin, width - margin))
-                new_ymin = max(margin, min(ymin, height - margin))
-                new_xmax = max(margin, min(xmax, width - margin))
-                new_ymax = max(margin, min(ymax, height - margin))
+                for obj in root.findall('object'):
+                    bbox = obj.find('bndbox')
+                    if bbox is None:
+                        continue
+                    
+                    xmin = int(float(bbox.find('xmin').text))
+                    ymin = int(float(bbox.find('ymin').text))
+                    xmax = int(float(bbox.find('xmax').text))
+                    ymax = int(float(bbox.find('ymax').text))
+                    
+                    new_xmin = max(margin, min(xmin, width - margin))
+                    new_ymin = max(margin, min(ymin, height - margin))
+                    new_xmax = max(margin, min(xmax, width - margin))
+                    new_ymax = max(margin, min(ymax, height - margin))
+                    
+                    if (new_xmin != xmin or new_ymin != ymin or 
+                        new_xmax != xmax or new_ymax != ymax):
+                        bbox.find('xmin').text = str(new_xmin)
+                        bbox.find('ymin').text = str(new_ymin)
+                        bbox.find('xmax').text = str(new_xmax)
+                        bbox.find('ymax').text = str(new_ymax)
+                        changed = True
                 
-                if new_xmin != xmin or new_ymin != ymin or new_xmax != xmax or new_ymax != ymax:
-                    bbox.find('xmin').text = str(new_xmin)
-                    bbox.find('ymin').text = str(new_ymin)
-                    bbox.find('xmax').text = str(new_xmax)
-                    bbox.find('ymax').text = str(new_ymax)
-                    changed = True
-            
-            if changed:
-                tree.write(xml_path)
-                fixed_count += 1
+                if changed:
+                    tree.write(xml_path)
+                    fixed_count += 1
+                    
+            except Exception as e:
+                self.log(f"⚠️ Error pada {xml_file}: {e}")
         
         self.log(f"✅ Bbox diperbaiki: {fixed_count} file")
         return True
     
     def fix_xml_structure(self, workspace_name):
+        """Optimized XML structure fixing"""
+        if self.is_cancelled:
+            return False
+            
         self.log(f"🔧 Memperbaiki struktur XML...")
         
         ann_dir = f"output/{workspace_name}"
+        xml_files = [f for f in os.listdir(ann_dir) if f.endswith(".xml")]
         fixed = 0
         
-        for file in os.listdir(ann_dir):
-            if not file.endswith(".xml"):
-                continue
-            
+        for file in xml_files:
+            if self.is_cancelled:
+                return False
+                
             path = os.path.join(ann_dir, file)
-            tree = ET.parse(path)
-            root = tree.getroot()
-            changed = False
-            
-            for obj in root.findall("object"):
-                tags = {child.tag: child for child in obj}
+            try:
+                tree = ET.parse(path)
+                root = tree.getroot()
+                changed = False
                 
-                if "pose" not in tags:
-                    pose = ET.Element("pose")
-                    pose.text = "Unspecified"
-                    obj.insert(1, pose)
-                    changed = True
+                for obj in root.findall("object"):
+                    tags = {child.tag for child in obj}
+                    
+                    if "pose" not in tags:
+                        pose = ET.Element("pose")
+                        pose.text = "Unspecified"
+                        obj.insert(1, pose)
+                        changed = True
+                    
+                    if "truncated" not in tags:
+                        truncated = ET.Element("truncated")
+                        truncated.text = "0"
+                        obj.insert(2, truncated)
+                        changed = True
+                    
+                    if "difficult" not in tags:
+                        difficult = ET.Element("difficult")
+                        difficult.text = "0"
+                        obj.insert(3, difficult)
+                        changed = True
                 
-                if "truncated" not in tags:
-                    truncated = ET.Element("truncated")
-                    truncated.text = "0"
-                    obj.insert(2, truncated)
-                    changed = True
-                
-                if "difficult" not in tags:
-                    difficult = ET.Element("difficult")
-                    difficult.text = "0"
-                    obj.insert(3, difficult)
-                    changed = True
-            
-            if changed:
-                tree.write(path)
-                fixed += 1
+                if changed:
+                    tree.write(path)
+                    fixed += 1
+                    
+            except Exception as e:
+                self.log(f"⚠️ Error pada {file}: {e}")
         
         self.log(f"✅ XML diperbaiki: {fixed} file")
+        return True
+    
+    def copy_all_images_to_output(self, workspace_name):
+        """Optimized image copying with batch operations"""
+        if self.is_cancelled:
+            return False
+            
+        self.log("\n📥 Menyalin semua gambar ke folder output...")
+
+        datasets_input_root = "datasetsInput"
+        output_dir = f"output/{workspace_name}"
+        os.makedirs(output_dir, exist_ok=True)
+
+        image_exts = {'.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG'}
+        copied = 0
+
+        folders = [f for f in os.listdir(datasets_input_root) 
+                   if f.startswith(workspace_name + "-")]
+
+        for folder in folders:
+            if self.is_cancelled:
+                return False
+                
+            full_folder = os.path.join(datasets_input_root, folder)
+            
+            if os.path.isdir(full_folder):
+                files = [f for f in os.listdir(full_folder) 
+                        if os.path.splitext(f)[1] in image_exts]
+                
+                for f in files:
+                    if self.is_cancelled:
+                        return False
+                        
+                    src = os.path.join(full_folder, f)
+                    dst = os.path.join(output_dir, f)
+                    
+                    if not os.path.exists(dst):
+                        try:
+                            shutil.copy2(src, dst)
+                            copied += 1
+                        except Exception as e:
+                            self.log(f"⚠️ Error menyalin {f}: {e}")
+
+        self.log(f"✅ {copied} gambar berhasil disalin ke output")
+        return True
     
     def split_and_generate(self, workspace_name):
+        """Optimized dataset splitting"""
+        if self.is_cancelled:
+            return False
+            
         self.log(f"\n📊 Melakukan split dataset...")
         
         output_dir = f"output/{workspace_name}"
         dataset_root = f"datasetsOutput/{workspace_name}"
         
-        # Get all XML files
         xml_files = [f for f in os.listdir(output_dir) if f.endswith('.xml')]
         random.shuffle(xml_files)
         
@@ -487,53 +619,66 @@ class DatasetGeneratorGUI:
         self.log(f"   📦 Train: {len(train_files)} file")
         self.log(f"   📦 Valid: {len(valid_files)} file")
         
-        # Create split folders
         train_dir = os.path.join(dataset_root, "train")
         valid_dir = os.path.join(dataset_root, "valid")
         
         os.makedirs(train_dir, exist_ok=True)
         os.makedirs(valid_dir, exist_ok=True)
         
-        # Copy files to split folders
-        for xml_file in train_files:
-            base_name = os.path.splitext(xml_file)[0]
-            
-            # Copy XML
-            shutil.copy(
-                os.path.join(output_dir, xml_file),
-                os.path.join(train_dir, xml_file)
-            )
-            
-            # Copy image
-            for ext in ['.jpg', '.png', '.jpeg', '.JPG', '.PNG', '.JPEG']:
-                img_path = os.path.join(output_dir, base_name + ext)
-                if os.path.exists(img_path):
-                    shutil.copy(img_path, os.path.join(train_dir, base_name + ext))
-                    break
+        image_exts = ['.jpg', '.png', '.jpeg', '.JPG', '.PNG', '.JPEG']
         
-        for xml_file in valid_files:
+        # Process train files
+        for xml_file in train_files:
+            if self.is_cancelled:
+                return False
+                
             base_name = os.path.splitext(xml_file)[0]
             
-            # Copy XML
-            shutil.copy(
-                os.path.join(output_dir, xml_file),
-                os.path.join(valid_dir, xml_file)
-            )
+            try:
+                shutil.copy2(
+                    os.path.join(output_dir, xml_file),
+                    os.path.join(train_dir, xml_file)
+                )
+                
+                for ext in image_exts:
+                    img_path = os.path.join(output_dir, base_name + ext)
+                    if os.path.exists(img_path):
+                        shutil.move(img_path, os.path.join(train_dir, base_name + ext))
+                        break
+            except Exception as e:
+                self.log(f"⚠️ Error memproses {xml_file}: {e}")
+        
+        # Process valid files
+        for xml_file in valid_files:
+            if self.is_cancelled:
+                return False
+                
+            base_name = os.path.splitext(xml_file)[0]
             
-            # Copy image
-            for ext in ['.jpg', '.png', '.jpeg', '.JPG', '.PNG', '.JPEG']:
-                img_path = os.path.join(output_dir, base_name + ext)
-                if os.path.exists(img_path):
-                    shutil.copy(img_path, os.path.join(valid_dir, base_name + ext))
-                    break
+            try:
+                shutil.copy2(
+                    os.path.join(output_dir, xml_file),
+                    os.path.join(valid_dir, xml_file)
+                )
+                
+                for ext in image_exts:
+                    img_path = os.path.join(output_dir, base_name + ext)
+                    if os.path.exists(img_path):
+                        shutil.move(img_path, os.path.join(valid_dir, base_name + ext))
+                        break
+            except Exception as e:
+                self.log(f"⚠️ Error memproses {xml_file}: {e}")
         
         self.log(f"✅ Split dataset selesai")
         
-        # Generate VOC format
-        self.generate_voc_format(dataset_root)
+        return self.generate_voc_format(dataset_root)
     
     def generate_voc_format(self, dataset_root):
-        self.log(f"\n🏗️  Membuat format VOC...")
+        """Optimized VOC format generation"""
+        if self.is_cancelled:
+            return False
+            
+        self.log(f"\n🗂️  Membuat format VOC...")
         
         voc_output = f"VOCDatasetOutput/{WORKSPACENAME}"
         os.makedirs(voc_output, exist_ok=True)
@@ -548,9 +693,12 @@ class DatasetGeneratorGUI:
         os.makedirs(annot_dir, exist_ok=True)
         
         splits = ["train", "valid"]
-        image_exts = (".jpg", ".png", ".jpeg", ".JPG", ".PNG", ".JPEG")
+        image_exts = {".jpg", ".png", ".jpeg", ".JPG", ".PNG", ".JPEG"}
         
         for split_name in splits:
+            if self.is_cancelled:
+                return False
+                
             ann_folder = os.path.join(dataset_root, split_name)
             txt_path = os.path.join(imagesets_dir, f"{split_name}.txt")
             
@@ -561,36 +709,50 @@ class DatasetGeneratorGUI:
             )
             
             with open(txt_path, "w") as f:
-                for name in file_names:
-                    f.write(name + "\n")
+                f.write("\n".join(file_names) + "\n")
             
             self.log(f"   ✅ {split_name}.txt dibuat ({len(file_names)} file)")
             
-            # Move files
+            # Move files efficiently
             for file_name in os.listdir(ann_folder):
+                if self.is_cancelled:
+                    return False
+                    
                 src_path = os.path.join(ann_folder, file_name)
                 
-                if file_name.lower().endswith(image_exts):
-                    shutil.copy(src_path, os.path.join(jpeg_dir, file_name))
-                elif file_name.lower().endswith(".xml"):
-                    shutil.copy(src_path, os.path.join(annot_dir, file_name))
+                try:
+                    if os.path.splitext(file_name)[1] in image_exts:
+                        shutil.copy2(src_path, os.path.join(jpeg_dir, file_name))
+                    elif file_name.endswith(".xml"):
+                        shutil.copy2(src_path, os.path.join(annot_dir, file_name))
+                except Exception as e:
+                    self.log(f"⚠️ Error memindahkan {file_name}: {e}")
             
             self.log(f"   ✅ File {split_name} dipindahkan")
         
-        # Clean up
+        # Cleanup
         if os.path.exists(dataset_root):
-            shutil.rmtree(dataset_root)
-            self.log(f"🧹 Folder {dataset_root} dihapus")
+            try:
+                shutil.rmtree(dataset_root)
+                self.log(f"🧹 Folder {dataset_root} dihapus")
+            except Exception as e:
+                self.log(f"⚠️ Error menghapus folder: {e}")
         
         self.log(f"\n🎉 Dataset VOC siap dipakai YOLOX!")
-        self.log(f"📍 Lokasi: {voc_output}/VOCdevkit/VOC2012/")
+        self.log(f"📁 Lokasi: {voc_output}/VOCdevkit/VOC2012/")
+        return True
     
     def generate_dataset(self):
+        global PROCESSING_FLAG, CURRENT_WORKSPACE
+        
         if not self.selected_workspace.get():
             messagebox.showwarning("Peringatan", "Pilih workspace terlebih dahulu!")
             return
         
         workspace_name = self.selected_workspace.get()
+        CURRENT_WORKSPACE = workspace_name
+        PROCESSING_FLAG = True
+        self.is_cancelled = False
         
         self.log_text.delete(1.0, tk.END)
         self.log("=" * 60)
@@ -601,30 +763,61 @@ class DatasetGeneratorGUI:
         
         self.generate_btn.config(state=tk.DISABLED, bg="#555555", text="⏳ Processing...")
         
-        try:
-            # Step 1: Fix bbox
-            if not self.fix_bbox_clamp(workspace_name):
-                raise Exception("Gagal memperbaiki bbox")
+        def run_generation():
+            try:
+                if not self.copy_all_images_to_output(workspace_name):
+                    raise Exception("Proses dibatalkan saat menyalin gambar")
+                
+                if not self.fix_bbox_clamp(workspace_name):
+                    raise Exception("Proses dibatalkan saat memperbaiki bbox")
+                
+                if not self.fix_xml_structure(workspace_name):
+                    raise Exception("Proses dibatalkan saat memperbaiki XML")
+                
+                if not self.split_and_generate(workspace_name):
+                    raise Exception("Proses dibatalkan saat split dataset")
+                
+                if not self.is_cancelled:
+                    self.log("=" * 60)
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Sukses! 🎉", 
+                        f"Dataset {workspace_name} berhasil digenerate!\n\nCek folder: VOCDatasetOutput/"
+                    ))
+                
+            except Exception as e:
+                if self.is_cancelled:
+                    self.log(f"\n⚠️ PROSES DIBATALKAN OLEH USER")
+                    self.cleanup_workspace(workspace_name)
+                else:
+                    self.log(f"\n❌ ERROR: {str(e)}")
+                    self.root.after(0, lambda: messagebox.showerror("Error", f"Terjadi kesalahan: {str(e)}"))
             
-            # Step 2: Fix XML structure
-            self.fix_xml_structure(workspace_name)
-            
-            # Step 3: Split and generate
-            self.split_and_generate(workspace_name)
-            
-            self.log("=" * 60)
-            messagebox.showinfo("Sukses! 🎉", f"Dataset {workspace_name} berhasil digenerate!\n\nCek folder: VOCDatasetOutput/")
-            
-        except Exception as e:
-            self.log(f"\n❌ ERROR: {str(e)}")
-            messagebox.showerror("Error", f"Terjadi kesalahan: {str(e)}")
+            finally:
+                PROCESSING_FLAG = False
+                CURRENT_WORKSPACE = None
+                self.root.after(0, lambda: self.generate_btn.config(
+                    state=tk.NORMAL, 
+                    bg=self.accent_green, 
+                    text="🚀 GENERATE DATASET"
+                ))
         
-        finally:
-            self.generate_btn.config(state=tk.NORMAL, bg=self.accent_green, text="🚀 GENERATE DATASET")
+        # Run in separate thread to keep UI responsive
+        thread = threading.Thread(target=run_generation, daemon=True)
+        thread.start()
 
 def main():
     root = tk.Tk()
     app = DatasetGeneratorGUI(root)
+    
+    def on_closing():
+        global PROCESSING_FLAG
+        if PROCESSING_FLAG:
+            if messagebox.askokcancel("Quit", "Proses sedang berjalan. Yakin ingin keluar?\nFile sementara akan dibersihkan."):
+                app.handle_cancellation()
+        else:
+            root.destroy()
+    
+    root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
 
 if __name__ == "__main__":
