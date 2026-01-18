@@ -45,6 +45,220 @@ class TkTerminalRedirector:
             self.text_widget.see(tk.END)
             self.text_widget.configure(state=tk.DISABLED)
 
+class TrainingConfigDialog:
+    """Dialog untuk konfigurasi training parameters"""
+    
+    def __init__(self, parent, default_epoch=100, default_batch=16):
+        self.result = None
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Training Configuration")
+        self.dialog.geometry("400x300")
+        self.dialog.resizable(False, False)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Center dialog
+        self.dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (400 // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (300 // 2)
+        self.dialog.geometry(f"+{x}+{y}")
+        
+        # Dark theme colors
+        bg_dark = "#1e1e1e"
+        bg_secondary = "#2d2d2d"
+        fg_light = "#e0e0e0"
+        accent_blue = "#0d7377"
+        accent_green = "#14a76c"
+        
+        self.dialog.configure(bg=bg_dark)
+        
+        # Title
+        title_frame = tk.Frame(self.dialog, bg=accent_blue, height=60)
+        title_frame.pack(fill=tk.X)
+        title_frame.pack_propagate(False)
+        
+        title_label = tk.Label(
+            title_frame,
+            text="⚙️ Training Configuration",
+            font=("Segoe UI", 16, "bold"),
+            bg=accent_blue,
+            fg="white"
+        )
+        title_label.pack(pady=15)
+        
+        # Main content
+        content_frame = tk.Frame(self.dialog, bg=bg_dark, padx=30, pady=10)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Epoch input
+        epoch_frame = tk.Frame(content_frame, bg=bg_dark)
+        epoch_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(
+            epoch_frame,
+            text="Epochs:",
+            font=("Segoe UI", 11, "bold"),
+            bg=bg_dark,
+            fg=fg_light,
+            width=10,
+            anchor="w"
+        ).pack(side=tk.LEFT)
+        
+        self.epoch_var = tk.IntVar(value=default_epoch)
+        epoch_spinbox = tk.Spinbox(
+            epoch_frame,
+            from_=1,
+            to=1000,
+            textvariable=self.epoch_var,
+            font=("Segoe UI", 11),
+            width=15,
+            bg=bg_secondary,
+            fg=fg_light,
+            buttonbackground=bg_secondary,
+            relief=tk.FLAT,
+            insertbackground=fg_light
+        )
+        epoch_spinbox.pack(side=tk.LEFT, padx=10)
+        
+        tk.Label(
+            epoch_frame,
+            text="(1-1000)",
+            font=("Segoe UI", 9),
+            bg=bg_dark,
+            fg="#888888"
+        ).pack(side=tk.LEFT)
+        
+        # Batch size input
+        batch_frame = tk.Frame(content_frame, bg=bg_dark)
+        batch_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Label(
+            batch_frame,
+            text="Batch Size:",
+            font=("Segoe UI", 11, "bold"),
+            bg=bg_dark,
+            fg=fg_light,
+            width=10,
+            anchor="w"
+        ).pack(side=tk.LEFT)
+        
+        self.batch_var = tk.IntVar(value=default_batch)
+        batch_spinbox = tk.Spinbox(
+            batch_frame,
+            from_=1,
+            to=128,
+            textvariable=self.batch_var,
+            font=("Segoe UI", 11),
+            width=15,
+            bg=bg_secondary,
+            fg=fg_light,
+            buttonbackground=bg_secondary,
+            relief=tk.FLAT,
+            insertbackground=fg_light
+        )
+        batch_spinbox.pack(side=tk.LEFT, padx=10)
+        
+        tk.Label(
+            batch_frame,
+            text="(1-128)",
+            font=("Segoe UI", 9),
+            bg=bg_dark,
+            fg="#888888"
+        ).pack(side=tk.LEFT)
+        
+        # Info text
+        info_text = tk.Label(
+            content_frame,
+            text="💡 Batch size tergantung VRAM GPU.\n"
+                 "Epoch lebih banyak = training lebih lama.",
+            font=("Segoe UI", 9),
+            bg=bg_dark,
+            fg="#aaaaaa",
+            justify=tk.LEFT
+        )
+        info_text.pack(pady=20)
+        
+        # Buttons
+        button_frame = tk.Frame(content_frame, bg=bg_dark)
+        button_frame.pack(fill=tk.X, pady=10)
+        
+        cancel_btn = tk.Button(
+            button_frame,
+            text="❌ Cancel",
+            font=("Segoe UI", 11, "bold"),
+            bg="#e74c3c",
+            fg="white",
+            activebackground="#c0392b",
+            cursor="hand2",
+            relief=tk.FLAT,
+            command=self.cancel,
+            width=12
+        )
+        cancel_btn.pack(side=tk.LEFT, padx=5, ipady=25)
+        
+        start_btn = tk.Button(
+            button_frame,
+            text="🚀 Start Training",
+            font=("Segoe UI", 11, "bold"),
+            bg=accent_green,
+            fg="white",
+            activebackground="#12925f",
+            cursor="hand2",
+            relief=tk.FLAT,
+            command=self.start,
+            width=15
+        )
+        start_btn.pack(side=tk.RIGHT, padx=5, ipady=25)
+        
+        # Bind Enter key
+        self.dialog.bind('<Return>', lambda e: self.start())
+        self.dialog.bind('<Escape>', lambda e: self.cancel())
+        
+    def start(self):
+        """Validate and save configuration"""
+        try:
+            epoch = self.epoch_var.get()
+            batch = self.batch_var.get()
+            
+            if epoch < 1 or epoch > 1000:
+                messagebox.showwarning(
+                    "Invalid Input",
+                    "Epochs harus antara 1-1000!",
+                    parent=self.dialog
+                )
+                return
+            
+            if batch < 1 or batch > 128:
+                messagebox.showwarning(
+                    "Invalid Input",
+                    "Batch size harus antara 1-128!",
+                    parent=self.dialog
+                )
+                return
+            
+            self.result = {
+                'epoch': epoch,
+                'batch': batch
+            }
+            self.dialog.destroy()
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Invalid input: {str(e)}",
+                parent=self.dialog
+            )
+    
+    def cancel(self):
+        """Cancel dialog"""
+        self.result = None
+        self.dialog.destroy()
+    
+    def show(self):
+        """Show dialog and wait for result"""
+        self.dialog.wait_window()
+        return self.result
+
 class AnnotationGUI:
     def __init__(self, root):
         self.root = root
@@ -1077,6 +1291,25 @@ class AnnotationGUI:
                 # Process sudah selesai
                 state.training_running = False
 
+        # ========================================
+        # TAMPILKAN DIALOG KONFIGURASI
+        # ========================================
+        config_dialog = TrainingConfigDialog(
+            self.root,
+            default_epoch=EPOCH,  # default dari global variable
+            default_batch=BATCH
+        )
+        config = config_dialog.show()
+        
+        # Jika user cancel
+        if config is None:
+            return
+        
+        # Update epoch dan batch dari dialog
+        current_epoch = config['epoch']
+        current_batch = config['batch']
+        # ========================================
+
         state.training_running = True
 
         train_script = os.path.join(
@@ -1103,8 +1336,8 @@ class AnnotationGUI:
             "--model_path", model_path,
             "--model_folder", model_folder,
 
-            "--epochs", str(EPOCH),
-            "--batch", str(BATCH),
+            "--epochs", str(current_epoch),  # Gunakan nilai dari dialog
+            "--batch", str(current_batch),   # Gunakan nilai dari dialog
 
             "--classlist"
         ] + class_args
@@ -1129,7 +1362,10 @@ class AnnotationGUI:
 
             messagebox.showinfo(
                 "Training Started",
-                "Training started in new terminal!\nCheck terminal for progress.",
+                f"Training started in new terminal!\n\n"
+                f"📊 Epochs: {current_epoch}\n"
+                f"📦 Batch Size: {current_batch}\n\n"
+                f"Check terminal for progress.",
                 parent=self.root
             )
 
@@ -1143,7 +1379,7 @@ class AnnotationGUI:
                 parent=self.root
             )
 
-            state.training_running = False
+        state.training_running = False
     
     def run_inference(self):
         """Run inference on current image"""
