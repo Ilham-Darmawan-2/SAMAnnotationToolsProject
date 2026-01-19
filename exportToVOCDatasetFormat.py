@@ -85,7 +85,17 @@ class DatasetGeneratorGUI:
     def cleanup_workspace(self, workspace_name):
         """Clean up workspace output folder"""
         output_dir = f"output/{workspace_name}"
+        temp_dir = f"temp/{workspace_name}"
         
+        # Cleanup temp folder
+        if os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                self.log(f"🗑️ Folder temporary {temp_dir} dihapus")
+            except Exception as e:
+                self.log(f"⚠️ Error menghapus temp folder: {e}")
+        
+        # Cleanup image files in output (only if cancelled)
         if os.path.exists(output_dir):
             try:
                 # Remove all image files
@@ -598,23 +608,43 @@ class DatasetGeneratorGUI:
         return True
     
     def split_and_generate(self, workspace_name):
-        """Optimized dataset splitting"""
+        """Optimized dataset splitting with temp folder"""
         if self.is_cancelled:
             return False
             
         self.log(f"\n📊 Melakukan split dataset...")
         
         output_dir = f"output/{workspace_name}"
+        temp_dir = f"temp/{workspace_name}"
         dataset_root = f"datasetsOutput/{workspace_name}"
         
-        xml_files = [f for f in os.listdir(output_dir) if f.endswith('.xml')]
-        random.shuffle(xml_files)
+        # Create temp directory
+        os.makedirs(temp_dir, exist_ok=True)
         
-        total_files = len(xml_files)
+        # Copy all XML files to temp folder
+        self.log(f"📋 Menyalin XML ke folder temporary...")
+        xml_files = [f for f in os.listdir(output_dir) if f.endswith('.xml')]
+        
+        for xml_file in xml_files:
+            if self.is_cancelled:
+                return False
+            try:
+                shutil.copy2(
+                    os.path.join(output_dir, xml_file),
+                    os.path.join(temp_dir, xml_file)
+                )
+            except Exception as e:
+                self.log(f"⚠️ Error menyalin {xml_file}: {e}")
+        
+        # Shuffle and split
+        temp_xml_files = [f for f in os.listdir(temp_dir) if f.endswith('.xml')]
+        random.shuffle(temp_xml_files)
+        
+        total_files = len(temp_xml_files)
         train_count = int(total_files * self.train_ratio.get() / 100)
         
-        train_files = xml_files[:train_count]
-        valid_files = xml_files[train_count:]
+        train_files = temp_xml_files[:train_count]
+        valid_files = temp_xml_files[train_count:]
         
         self.log(f"   📦 Train: {len(train_files)} file")
         self.log(f"   📦 Valid: {len(valid_files)} file")
@@ -627,7 +657,7 @@ class DatasetGeneratorGUI:
         
         image_exts = ['.jpg', '.png', '.jpeg', '.JPG', '.PNG', '.JPEG']
         
-        # Process train files
+        # Process train files - MOVE from temp, COPY image from output
         for xml_file in train_files:
             if self.is_cancelled:
                 return False
@@ -635,11 +665,13 @@ class DatasetGeneratorGUI:
             base_name = os.path.splitext(xml_file)[0]
             
             try:
-                shutil.copy2(
-                    os.path.join(output_dir, xml_file),
+                # Move XML from temp folder
+                shutil.move(
+                    os.path.join(temp_dir, xml_file),
                     os.path.join(train_dir, xml_file)
                 )
                 
+                # Move image from output folder
                 for ext in image_exts:
                     img_path = os.path.join(output_dir, base_name + ext)
                     if os.path.exists(img_path):
@@ -648,7 +680,7 @@ class DatasetGeneratorGUI:
             except Exception as e:
                 self.log(f"⚠️ Error memproses {xml_file}: {e}")
         
-        # Process valid files
+        # Process valid files - MOVE from temp, COPY image from output
         for xml_file in valid_files:
             if self.is_cancelled:
                 return False
@@ -656,11 +688,13 @@ class DatasetGeneratorGUI:
             base_name = os.path.splitext(xml_file)[0]
             
             try:
-                shutil.copy2(
-                    os.path.join(output_dir, xml_file),
+                # Move XML from temp folder
+                shutil.move(
+                    os.path.join(temp_dir, xml_file),
                     os.path.join(valid_dir, xml_file)
                 )
                 
+                # Move image from output folder
                 for ext in image_exts:
                     img_path = os.path.join(output_dir, base_name + ext)
                     if os.path.exists(img_path):
@@ -671,7 +705,18 @@ class DatasetGeneratorGUI:
         
         self.log(f"✅ Split dataset selesai")
         
-        return self.generate_voc_format(dataset_root)
+        # Generate VOC format
+        result = self.generate_voc_format(dataset_root)
+        
+        # Cleanup temp folder after successful generation
+        if os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                self.log(f"🧹 Folder temporary dihapus")
+            except Exception as e:
+                self.log(f"⚠️ Error menghapus temp folder: {e}")
+        
+        return result
     
     def generate_voc_format(self, dataset_root):
         """Optimized VOC format generation"""
