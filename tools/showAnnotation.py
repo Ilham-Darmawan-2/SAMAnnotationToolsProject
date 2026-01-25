@@ -3,11 +3,15 @@ import cv2
 import xml.etree.ElementTree as ET
 
 # ================== CONFIG ==================
-IMAGE_DIR = "datasetsInput/vehicle-1"
-VOC_DIR   = "output/vehicle"              # XML dari annotator (PAS)
-YOLO_DIR  = "inference/vehicle/labels"    # TXT hasil export YOLO
+IMAGE_DIR = "datasetsInput/markerv2-7"
+VOC_DIR   = "output/markerv2"
+YOLO_DIR  = "inference/markerv2/labels"
 WINDOW_NAME = "Annotation Viewer"
-CLASS_NAMES = ["bus", "car", "motorbike", "truck"]
+
+CLASS_NAMES = ['patokPersegi', 'patokPersegiIR', 'patokPersegiPanjang', 'patokPersegiPanjangIR']
+
+ADJUST_CLASSES = ["patokPersegiPanjangIR", "patokPersegiIR"]
+SHRINK_RATIO = 0.03   # 5% (bisa ganti 0.03, 0.1, dll)
 
 DISP_W, DISP_H = 1280, 720
 # ============================================
@@ -59,8 +63,19 @@ def load_yolo(txt_path, img_w, img_h):
     return boxes
 
 
-def draw_boxes(image, boxes, color):
+def draw_boxes(image, boxes, color, adjust_classes=None, shrink_ratio=0.0):
+    H, W = image.shape[:2]
+
     for label, xmin, ymin, xmax, ymax in boxes:
+        if adjust_classes and label in adjust_classes:
+            h = ymax - ymin
+            offset = int(h * shrink_ratio)
+            ymin = ymin + offset
+            ymax = ymax - offset
+
+            ymin = max(0, ymin)
+            ymax = min(H - 1, ymax)
+
         cv2.rectangle(image, (xmin, ymin), (xmax, ymax), color, 2)
         cv2.putText(
             image,
@@ -104,34 +119,39 @@ def main():
 
         H, W = image.shape[:2]
 
-        # ===== load annotation =====
         if os.path.exists(xml_path):
             boxes_voc = load_voc(xml_path)
             print(f"[VOC] {img_name}")
-            image = draw_boxes(image, boxes_voc, (0, 255, 0))  # hijau = VOC
+            image = draw_boxes(
+                image, boxes_voc, (0, 255, 0),
+                adjust_classes=ADJUST_CLASSES,
+                shrink_ratio=SHRINK_RATIO
+            )
 
         if os.path.exists(txt_path):
             boxes_yolo = load_yolo(txt_path, W, H)
             print(f"[YOLO] {img_name}")
-            image = draw_boxes(image, boxes_yolo, (0, 0, 255))  # merah = YOLO
+            image = draw_boxes(
+                image, boxes_yolo, (0, 0, 255),
+                adjust_classes=ADJUST_CLASSES,
+                shrink_ratio=SHRINK_RATIO
+            )
 
-        # resize hanya untuk display
         image_disp = cv2.resize(image, (DISP_W, DISP_H))
         cv2.imshow(WINDOW_NAME, image_disp)
 
         key = cv2.waitKey(0) & 0xFF
 
-        # ========= KEY CONTROL =========
         if key == ord("q"):
             break
 
-        elif key == ord("d"):  # next
+        elif key == ord("d"):
             idx = (idx + 1) % len(images)
 
-        elif key == ord("a"):  # prev
+        elif key == ord("a"):
             idx = (idx - 1) % len(images)
 
-        elif key == 8:  # BACKSPACE (delete)
+        elif key == 8:  # BACKSPACE
             print(f"🗑️ Menghapus: {img_name}")
 
             try:

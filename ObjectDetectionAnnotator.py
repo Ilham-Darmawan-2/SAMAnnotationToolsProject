@@ -289,6 +289,11 @@ class AnnotationGUI:
         self.canvas_offset_x = 0
         self.canvas_offset_y = 0
         
+        self.auto_annotate_running = False
+        self.auto_annotate_interval = 3000  # default 3 detik dalam ms
+        self.auto_annotate_job = None
+        self.inference_in_progress = False  # 🔒 LOCK untuk mencegah inference overlap
+        
         # Setup UI
         self.create_widgets()
 
@@ -326,6 +331,7 @@ class AnnotationGUI:
         self.root.bind('p', lambda e: self.toggle_auto_annotation())
         self.root.bind('<Delete>', lambda e: self.delete_image())
         self.root.bind('<BackSpace>', lambda e: self.delete_image())
+        self.root.bind('f', lambda e: self.toggle_auto_annotate())
         
         # Bind number keys for class selection (1-9)
         for i in range(9):
@@ -339,6 +345,285 @@ class AnnotationGUI:
             self.text_label.config(text="🅣 Text: OFF", fg='#ff4444')
         self.update_display()
 
+    def show_auto_annotate_config_dialog(self):
+        """Dialog untuk konfigurasi auto annotate"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Auto Annotate Configuration")
+        dialog.geometry("450x280")
+        dialog.configure(bg='#2b2b2b')
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Title
+        title_frame = tk.Frame(dialog, bg='#0d7377', height=60)
+        title_frame.pack(fill=tk.X)
+        title_frame.pack_propagate(False)
+        
+        tk.Label(
+            title_frame,
+            text="🤖 Auto Annotate Configuration",
+            font=("Segoe UI", 16, "bold"),
+            bg='#0d7377',
+            fg="white"
+        ).pack(pady=15)
+        
+        # Content
+        content_frame = tk.Frame(dialog, bg='#2b2b2b', padx=30, pady=20)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Interval input
+        interval_frame = tk.Frame(content_frame, bg='#2b2b2b')
+        interval_frame.pack(fill=tk.X, pady=15)
+        
+        tk.Label(
+            interval_frame,
+            text="Interval (detik):",
+            font=("Segoe UI", 11, "bold"),
+            bg='#2b2b2b',
+            fg='white',
+            width=15,
+            anchor="w"
+        ).pack(side=tk.LEFT)
+        
+        interval_var = tk.DoubleVar(value=self.auto_annotate_interval / 1000)
+        interval_spinbox = tk.Spinbox(
+            interval_frame,
+            from_=0.5,
+            to=60.0,
+            increment=0.5,
+            textvariable=interval_var,
+            font=("Segoe UI", 11),
+            width=15,
+            bg='#1e1e1e',
+            fg='white',
+            buttonbackground='#1e1e1e',
+            relief=tk.FLAT,
+            insertbackground='white'
+        )
+        interval_spinbox.pack(side=tk.LEFT, padx=10)
+        
+        tk.Label(
+            interval_frame,
+            text="(0.5-60)",
+            font=("Segoe UI", 9),
+            bg='#2b2b2b',
+            fg="#888888"
+        ).pack(side=tk.LEFT)
+        
+        # Info
+        info_text = tk.Label(
+            content_frame,
+            text="💡 Auto annotate akan:\n"
+                "   • Menjalankan inference pada gambar saat ini\n"
+                "   • Pindah ke gambar berikutnya\n"
+                "   • Mengulangi proses dengan interval yang ditentukan\n\n"
+                "⚠️ Tekan tombol 'Stop Auto' untuk menghentikan",
+            font=("Segoe UI", 9),
+            bg='#2b2b2b',
+            fg="#aaaaaa",
+            justify=tk.LEFT
+        )
+        info_text.pack(pady=15)
+        
+        result = {'start': False}
+        
+        def on_start():
+            try:
+                interval_sec = interval_var.get()
+                if interval_sec < 0.5 or interval_sec > 60:
+                    messagebox.showwarning(
+                        "Invalid Input",
+                        "Interval harus antara 0.5-60 detik!",
+                        parent=dialog
+                    )
+                    return
+                
+                result['start'] = True
+                result['interval'] = int(interval_sec * 1000)  # convert to ms
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror(
+                    "Error",
+                    f"Invalid input: {str(e)}",
+                    parent=dialog
+                )
+        
+        def on_cancel():
+            result['start'] = False
+            dialog.destroy()
+        
+        # Buttons
+        button_frame = tk.Frame(content_frame, bg='#2b2b2b')
+        button_frame.pack(fill=tk.X, pady=10)
+        
+        tk.Button(
+            button_frame,
+            text="❌ Cancel",
+            font=("Segoe UI", 11, "bold"),
+            bg="#e74c3c",
+            fg="white",
+            activebackground="#c0392b",
+            cursor="hand2",
+            relief=tk.FLAT,
+            command=on_cancel,
+            width=12
+        ).pack(side=tk.LEFT, padx=5, ipady=8)
+        
+        tk.Button(
+            button_frame,
+            text="🚀 Start",
+            font=("Segoe UI", 11, "bold"),
+            bg="#14a76c",
+            fg="white",
+            activebackground="#12925f",
+            cursor="hand2",
+            relief=tk.FLAT,
+            command=on_start,
+            width=15
+        ).pack(side=tk.RIGHT, padx=5, ipady=8)
+        
+        dialog.bind('<Return>', lambda e: on_start())
+        dialog.bind('<Escape>', lambda e: on_cancel())
+        
+        dialog.wait_window()
+        return result
+
+    def start_auto_annotate(self):
+        """Mulai auto annotate process"""
+        if self.auto_annotate_running:
+            messagebox.showinfo(
+                "Already Running",
+                "Auto annotate sudah berjalan!",
+                parent=self.root
+            )
+            return
+        
+        # Show config dialog
+        config = self.show_auto_annotate_config_dialog()
+        
+        if not config['start']:
+            return
+        
+        self.auto_annotate_interval = config['interval']
+        self.auto_annotate_running = True
+        
+        # Update UI
+        self.update_auto_annotate_status()
+        
+        print(f"[AUTO ANNOTATE] Started with interval: {self.auto_annotate_interval/1000}s")
+        
+        # Start the process
+        self._auto_annotate_cycle()
+
+    def _auto_annotate_cycle(self):
+        """Satu cycle dari auto annotate process dengan safety lock"""
+        if not self.auto_annotate_running:
+            return
+        
+        # 🔒 CEK APAKAH INFERENCE MASIH BERJALAN
+        if self.inference_in_progress:
+            print(f"[AUTO ANNOTATE] ⚠️  Skipping cycle - inference still in progress")
+            # Retry lagi setelah 1 detik
+            self.auto_annotate_job = self.root.after(1000, self._auto_annotate_cycle)
+            return
+        
+        try:
+            # 🔒 LOCK - Tandai inference sedang berjalan
+            self.inference_in_progress = True
+            
+            # Run inference on current image
+            print(f"[AUTO ANNOTATE] 🔄 Processing image {state.current_index + 1}/{len(self.images)}")
+            self.run_inference()
+            
+            # Move to next image
+            self.save_current()
+            
+            # 🔒 UNLOCK - Inference selesai
+            self.inference_in_progress = False
+            
+            # Pindah ke gambar berikutnya
+            state.current_index = (state.current_index + 1) % len(self.images)
+            self.load_current_image()
+            self.update_display()
+            
+            print(f"[AUTO ANNOTATE] ✅ Completed. Next cycle in {self.auto_annotate_interval/1000}s")
+            
+            # Schedule next cycle
+            self.auto_annotate_job = self.root.after(
+                self.auto_annotate_interval,
+                self._auto_annotate_cycle
+            )
+            
+        except Exception as e:
+            # 🔒 UNLOCK jika terjadi error
+            self.inference_in_progress = False
+            
+            print(f"[AUTO ANNOTATE] ❌ Error: {str(e)}")
+            self.stop_auto_annotate()
+            messagebox.showerror(
+                "Auto Annotate Error",
+                f"Error during auto annotate:\n{str(e)}",
+                parent=self.root
+            )
+
+    def stop_auto_annotate(self):
+        """Stop auto annotate process"""
+        if not self.auto_annotate_running:
+            return
+        
+        self.auto_annotate_running = False
+        
+        # Cancel scheduled job
+        if self.auto_annotate_job:
+            self.root.after_cancel(self.auto_annotate_job)
+            self.auto_annotate_job = None
+        
+        # 🔒 RESET LOCK saat stop
+        self.inference_in_progress = False
+        
+        # Update UI
+        self.update_auto_annotate_status()
+        
+        print("[AUTO ANNOTATE] Stopped")
+        messagebox.showinfo(
+            "Auto Annotate Stopped",
+            "Auto annotate telah dihentikan.",
+            parent=self.root
+        )
+
+    def toggle_auto_annotate(self):
+        """Toggle auto annotate on/off"""
+        if self.auto_annotate_running:
+            self.stop_auto_annotate()
+        else:
+            self.start_auto_annotate()
+
+    def update_auto_annotate_status(self):
+        """Update status label untuk auto annotate"""
+        if self.auto_annotate_running:
+            self.auto_annotate_label.config(
+                text=f"🔄 Auto Annotate: RUNNING ({self.auto_annotate_interval/1000}s)",
+                fg='#00ff00'
+            )
+            self.auto_annotate_btn.config(
+                text="⏸️ Stop Auto",
+                bg='#cc0000'
+            )
+        else:
+            self.auto_annotate_label.config(
+                text="🤖 Auto Annotate: OFF",
+                fg='#888888'
+            )
+            self.auto_annotate_btn.config(
+                text="▶️ Start Auto",
+                bg='#00aa00'
+            )
     
     def create_widgets(self):
         # ========== TOP TOOLBAR ==========
@@ -386,8 +671,11 @@ class AnnotationGUI:
         status_frame.pack(side=tk.RIGHT, padx=10)
         
         self.auto_label = tk.Label(status_frame, text="🤖 Auto: OFF", 
-                                   bg='#1e1e1e', fg='#888888', font=('Arial', 10))
+                               bg='#1e1e1e', fg='#888888', font=('Arial', 10))
         self.auto_label.pack(side=tk.RIGHT, padx=10)
+        
+        status_frame = tk.Frame(toolbar, bg='#1e1e1e')
+        status_frame.pack(side=tk.RIGHT, padx=10)
         
         self.force_label = tk.Label(status_frame, text="📦 Force Box: OFF", 
                                     bg='#1e1e1e', fg='#888888', font=('Arial', 10))
@@ -409,6 +697,27 @@ class AnnotationGUI:
                 command=self.toggle_bbox_text,
                 bg='#404040', fg='white', padx=8, pady=8,
                 font=('Arial', 8)).pack(side=tk.RIGHT, padx=2)
+        
+        self.auto_annotate_label = tk.Label(
+            status_frame,
+            text="🤖 Auto Annotate: OFF",
+            bg='#1e1e1e',
+            fg='#888888',
+            font=('Arial', 10, 'bold')
+        )
+        self.auto_annotate_label.pack(side=tk.RIGHT, padx=10)
+        
+        self.auto_annotate_btn = tk.Button(
+            status_frame,
+            text="▶️ Start Auto",
+            command=self.toggle_auto_annotate,
+            bg='#00aa00',
+            fg='white',
+            padx=10,
+            pady=8,
+            font=('Arial', 9, 'bold')
+        )
+        self.auto_annotate_btn.pack(side=tk.RIGHT, padx=5)
         
         # ========== MAIN CONTENT AREA ==========
         content = tk.Frame(self.root, bg='#2b2b2b')
@@ -571,6 +880,7 @@ class AnnotationGUI:
         E: Repeat Last    G: Inference
         T: Train Model    B: Force Box
         P: Auto Mode      Del: Delete Img
+        F: Auto Annotate  (Start/Stop)
 
         Classes:
         1-9: Quick Select
@@ -964,17 +1274,22 @@ class AnnotationGUI:
         if len(CLASSLIST) > 10:
             info += f"... +{len(CLASSLIST)-10} more\n"
         
-        info += f"\n══════════════════════\n"
-        info += f"STATUS\n"
-        info += f"══════════════════════\n"
-        if state.automated_annotation:
-            info += f"🤖 Auto Mode: ON\n"
-        if state.force_new_bbox:
-            info += f"📦 Force Box: ON\n"
-        if state.training_running:
-            info += f"🎓 Training: RUNNING\n"
-        if state.selected_bbox is not None:
-            info += f"✏️  Selected: Box #{state.selected_bbox + 1}\n"
+            info += f"\n╔══════════════════════╗\n"
+            info += f"STATUS\n"
+            info += f"╚══════════════════════╝\n"
+            
+            if self.auto_annotate_running:
+                info += f"🔄 Auto Annotate: RUNNING\n"
+                info += f"   Interval: {self.auto_annotate_interval/1000}s\n"
+            
+            if state.automated_annotation:
+                info += f"🤖 Auto Mode: ON\n"
+            if state.force_new_bbox:
+                info += f"📦 Force Box: ON\n"
+            if state.training_running:
+                info += f"🎯 Training: RUNNING\n"
+            if state.selected_bbox is not None:
+                info += f"✏️  Selected: Box #{state.selected_bbox + 1}\n"
         
         self.info_text.config(state=tk.NORMAL)
         self.info_text.delete('1.0', tk.END)
