@@ -15,12 +15,11 @@ from ultralytics import YOLO  # make sure ultralytics installed in same env
 import numpy as np
 
 # ---------- CONFIG ----------
-CAM_INDEX = "vehicle-cctv-4.mp4"
-SKIP_FRAMES = 2        # 2 => process every (SKIP_FRAMES + 1)th frame (every 3rd frame)
+CAM_INDEX = "64#1$_S20260202133857_E20260202134220.mp4"
+SKIP_FRAMES = 6        # 2 => process every (SKIP_FRAMES + 1)th frame (every 3rd frame)
 DISPLAY_H = 720        # max height for display/inference
-MODEL_PATH = "models/vehicle/modelAssistant.pt"  # change to your model (or pretrained)
+MODEL_PATH = "models/personInCar/modelAssistant.pt"  # change to your model (or pretrained)
 CONF_THRESHOLD = 0.4
-DEVICE = "cuda" if (cv2.cuda.getCudaEnabledDeviceCount() if hasattr(cv2, 'cuda') else False) else "cpu"
 # Fallback model name if MODEL_PATH doesn't exist (you can change)
 FALLBACK_MODEL = "yolov11s.pt"  # or "yolov8s.pt" if you prefer
 
@@ -103,7 +102,7 @@ while True:
         t0 = time.time()
         try:
             # predict returns list of Results; pass inference_frame directly (BGR numpy)
-            results = model.predict(inference_frame, conf=CONF_THRESHOLD, device=DEVICE, verbose=False)
+            results = model.predict(inference_frame, conf=CONF_THRESHOLD, device=0, verbose=False)
         except Exception as e:
             print("[ERROR] Inference failed:", e)
             results = []

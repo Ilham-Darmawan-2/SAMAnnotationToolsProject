@@ -1593,9 +1593,12 @@ class AnnotationGUI:
         # Get latest from class manager
         CLASSLIST = class_manager.get_classes()
 
-        # Cek apakah process masih jalan
-        if state.training_running and hasattr(state, "training_process"):
-            if state.training_process.poll() is None:
+        # Cek apakah process training masih jalan (regardless of training_running flag)
+        if hasattr(state, "training_process") and state.training_process is not None:
+            poll_result = state.training_process.poll()
+            
+            if poll_result is None:
+                # Process masih berjalan
                 messagebox.showwarning(
                     "Training Running",
                     "Training already running. Please wait...",
@@ -1603,8 +1606,9 @@ class AnnotationGUI:
                 )
                 return
             else:
-                # Process sudah selesai
+                # Process sudah selesai, reset flag
                 state.training_running = False
+                state.training_process = None
 
         # ========================================
         # TAMPILKAN DIALOG KONFIGURASI

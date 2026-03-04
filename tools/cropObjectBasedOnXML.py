@@ -5,10 +5,10 @@ import xml.etree.ElementTree as ET
 # ==============================
 # CONFIG
 # ==============================
-IMG_DIR = "datasetsInput/ppeKujangv2-1"                      # folder gambar
+IMG_DIR = "datasetsInput/ppeKujangv2-15"                      # folder gambar
 XML_DIR = "output/ppeKujangv2"                      # folder XML Pascal VOC
 OUTPUT_DIR = "objectCrop"          # folder output crop
-target_classes = ["Face"]  # isi target class bebas
+target_classes = ["Face", "Body"]  # isi target class bebas
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

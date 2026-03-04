@@ -28,6 +28,6 @@ def filter_pascal_voc_annotations(xml_folder, classes_to_remove):
             print(f"{xml_file}: {removed_count} object dihapus")
 
 # ===== Contoh pemakaian =====
-xml_folder = "output/markerv2"
+xml_folder = "output/fireSmoke"
 classes_to_remove = ["Object"]
 filter_pascal_voc_annotations(xml_folder, classes_to_remove)

@@ -4,9 +4,9 @@ import shutil
 # =====================
 # CONFIG
 # =====================
-FOLDER_A = "datasetsInput/markerv2-7"     # misal: datasets/images
-FOLDER_B = "output/markerv2"        # misal: datasets/annotations
-FOLDER_C = "temp/markerv2"     # misal: datasets/no_xml_images
+FOLDER_A = "datasetsInput/personInCar-9"     # misal: datasets/images
+FOLDER_B = "output/personInCar"        # misal: datasets/annotations
+FOLDER_C = "temp/personInCar"     # misal: datasets/no_xml_images
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
 

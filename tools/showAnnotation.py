@@ -3,12 +3,13 @@ import cv2
 import xml.etree.ElementTree as ET
 
 # ================== CONFIG ==================
-IMAGE_DIR = "datasetsInput/markerv2-7"
-VOC_DIR   = "output/markerv2"
-YOLO_DIR  = "inference/markerv2/labels"
+IMAGE_DIR = "datasetsInput/ppeKujangv2-1"
+VOC_DIR   = "output/ppeKujangv2v2"
+YOLO_DIR  = "inference/ppeKujangv2/labels"
 WINDOW_NAME = "Annotation Viewer"
 
-CLASS_NAMES = ['patokPersegi', 'patokPersegiIR', 'patokPersegiPanjang', 'patokPersegiPanjangIR']
+# CLASS_NAMES = ['patokPersegi', 'patokPersegiIR', 'patokPersegiPanjang', 'patokPersegiPanjangIR']
+CLASS_NAMES = ['Face', 'Shoes', 'Safety-Helmet', 'Body', 'Worker']
 
 ADJUST_CLASSES = ["patokPersegiPanjangIR", "patokPersegiIR"]
 SHRINK_RATIO = 0.03   # 5% (bisa ganti 0.03, 0.1, dll)

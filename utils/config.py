@@ -7,6 +7,10 @@ from utils.class_manager import ClassManager
 import tkinter as tk
 from tkinter import filedialog
 
+BASE_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
 # ======== SELECT INPUT FOLDER AT START ========
 _root = tk.Tk()
 _root.withdraw()  # Hide main tkinter window
@@ -32,11 +36,11 @@ if "-" in folder_name:
     if suffix.isdigit():
         workspaceName = base
 
-output_folder = f"output/{workspaceName}"
-inference_root = f"inference/{workspaceName}"
+output_folder = os.path.join(BASE_DIR, "output", workspaceName)
+inference_root = os.path.join(BASE_DIR, "inference", workspaceName)
 inference_images = os.path.join(inference_root, "images")
 inference_labels = os.path.join(inference_root, "labels")
-model_folder = f"models/{workspaceName}"
+model_folder = os.path.join(BASE_DIR, "models", workspaceName)
 model_path = os.path.join(model_folder, "modelAssistant.pt")
 
 # Create directories

@@ -28,7 +28,7 @@ def inference_current(images, current_index, conf=0.5):
     model = YOLO(model_path)
 
     with torch.no_grad():
-        results = model.predict(orig_img, conf=conf, iou=0.4)
+        results = model.predict(orig_img, conf=conf, iou=0.7)
 
     # Process boxes
     pred_boxes = []
